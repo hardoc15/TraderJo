@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RL Paper Trader</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #646b78; --line: #e3e6eb;
+    --accent: #2457d6; --pos: #13834f; --neg: #c2362f;
+    --c1: #2457d6; --c2: #d9822b; --c3: #2a9d8f; --c4: #c9a227; --c5: #9aa1ad;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --panel: #171a21; --text: #e7e9ee; --muted: #959cab; --line: #2a2f3a;
+            --accent: #6d95ff; --pos: #3fbf7f; --neg: #ef6b62;
+            --c1: #6d95ff; --c2: #f0a04b; --c3: #4cc3b3; --c4: #e3c04a; --c5: #7d8594; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 28px 16px 8px; max-width: 1120px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 24px; letter-spacing: -0.01em; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  main { max-width: 1120px; margin: 0 auto; padding: 8px 16px 48px; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); }
+  .bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; margin: 6px 0 8px; }
+  .bar div { height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+                         margin-right: 6px; background: var(--sw); vertical-align: -1px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  tr.hl td { font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .trades { max-height: 260px; overflow-y: auto; }
+  .chart { position: relative; height: 300px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  button { font: inherit; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: wait; }
+  input[type=date] { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+                     background: var(--panel); color: var(--text); }
+  .note { color: var(--muted); font-size: 13px; }
+  .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>RL Paper Trader</h1>
+  <p class="sub">A PPO reinforcement-learning agent allocating daily across SPY, QQQ, TLT, GLD and cash. Paper money only.</p>
+</header>
+<main>
+  <section class="panel">
+    <h2>Paper account</h2>
+    <div class="actions">
+      <button class="primary" id="stepBtn">Trade latest close</button>
+      <span class="note">or start fresh from</span>
+      <input type="date" id="replayDate" value="2026-01-02">
+      <button id="replayBtn">Replay</button>
+      <span class="note" id="status"></span>
+    </div>
+    <div id="paperEmpty" class="empty">No paper account yet. Click <b>Replay</b> to simulate trading since a date, or <b>Trade latest close</b> to start today.</div>
+    <div id="paperBody" hidden>
+      <div class="stats">
+        <div class="stat"><div class="k">Equity</div><div class="v" id="sEquity"></div></div>
+        <div class="stat"><div class="k">Return</div><div class="v" id="sRet"></div></div>
+        <div class="stat"><div class="k">As of close</div><div class="v" id="sAsOf"></div></div>
+        <div class="stat"><div class="k">Trades</div><div class="v" id="sTrades"></div></div>
+      </div>
+      <h2 style="margin-top:18px">Current target allocation</h2>
+      <div class="bar" id="allocBar"></div>
+      <div class="legend" id="allocLegend"></div>
+      <div class="grid2" style="margin-top:16px">
+        <div><div class="chart"><canvas id="paperChart"></canvas></div></div>
+        <div>
+          <div class="scroll"><table id="posTable"></table></div>
+          <h2 style="margin-top:16px">Recent trades</h2>
+          <div class="trades scroll"><table id="tradeTable"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Backtest on held-out test period</h2>
+    <p class="note" id="btNote"></p>
+    <div class="chart"><canvas id="btChart"></canvas></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>Results (mean ± std across seeds)</h2>
+      <div class="scroll"><table id="sumTable"></table></div>
+    </section>
+    <section class="panel">
+      <h2>Deployed agent allocation (test period)</h2>
+      <div class="chart"><canvas id="allocChart"></canvas></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const ASSETS = ["SPY", "QQQ", "TLT", "GLD", "CASH"];
+const colors = () => ASSETS.map((_, i) => css(`--c${i + 1}`));
+const pct = (x, d = 1) => (x >= 0 ? "+" : "") + (100 * x).toFixed(d) + "%";
+const usd = x => "$" + x.toLocaleString(undefined, {maximumFractionDigits: 0});
+const charts = {};
+
+function lineChart(id, datasets, yFmt) {
+  charts[id]?.destroy();
+  charts[id] = new Chart(document.getElementById(id), {
+    type: "line", data: {datasets},
+    options: {
+      maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+      interaction: {mode: "index", intersect: false},
+      scales: {x: {type: "category", labels: datasets[0].labels, ticks: {maxTicksLimit: 8, color: css("--muted")},
+                   grid: {color: css("--line")}},
+               y: {ticks: {callback: yFmt, color: css("--muted")}, grid: {color: css("--line")}}},
+      plugins: {legend: {labels: {color: css("--text"), boxWidth: 12, font: {size: 11}}}},
+      elements: {point: {radius: 0}}
+    }
+  });
+}
+
+async function loadBacktest() {
+  const d = await (await fetch("/api/backtest")).json();
+  document.getElementById("btNote").textContent =
+    `Growth of $1 from ${d.test_start}, after 10 bps transaction costs. The agent never saw this period during training or model selection.`;
+  const names = Object.keys(d.curves);
+  const palette = [css("--c5"), css("--c2"), css("--c3"), css("--c4"), "#a06cd5", css("--c1")];
+  const ds = names.map((n, i) => {
+    const isAgent = n.includes("PPO");
+    return {label: n, labels: d.curves[n].dates,
+            data: d.curves[n].values.map((v, j) => ({x: j, y: v})),
+            borderColor: isAgent ? css("--c1") : palette[i % 5], borderWidth: isAgent ? 2.6 : 1.4};
+  });
+  lineChart("btChart", ds, v => "$" + v.toFixed(2));
+
+  const t = document.getElementById("sumTable");
+  const cols = [["total_return", "Total"], ["sharpe", "Sharpe"], ["max_drawdown", "Max DD"], ["avg_daily_turnover", "Turnover"]];
+  t.innerHTML = "<tr><th>Strategy</th>" + cols.map(c => `<th>${c[1]}</th>`).join("") + "</tr>" +
+    d.summary.map(r => `<tr class="${r.strategy.includes("PPO") ? "hl" : ""}"><td>${r.strategy}</td>` +
+      cols.map(([k]) => `<td>${k === "sharpe" ? r[k].toFixed(2) : (100 * r[k]).toFixed(1) + "%"}</td>`).join("") + "</tr>").join("");
+
+  const a = d.allocation;
+  const step = 5, idx = a.dates.map((_, i) => i).filter(i => i % step === 0);
+  charts.alloc?.destroy();
+  charts.alloc = new Chart(document.getElementById("allocChart"), {
+    type: "line",
+    data: {labels: idx.map(i => a.dates[i]),
+           datasets: ASSETS.map((k, i) => ({label: k, data: idx.map(j => a[k][j]), fill: true,
+                                            backgroundColor: colors()[i], borderWidth: 0, pointRadius: 0}))},
+    options: {maintainAspectRatio: false, animation: false,
+              scales: {y: {stacked: true, max: 1, ticks: {callback: v => (100 * v) + "%", color: css("--muted")}, grid: {color: css("--line")}},
+                       x: {ticks: {maxTicksLimit: 6, color: css("--muted")}, grid: {display: false}}},
+              plugins: {legend: {labels: {color: css("--text"), boxWidth: 12}}}}
+  });
+}
+
+function renderPaper(p) {
+  if (!p.account || !p.account.history.length) return;
+  document.getElementById("paperEmpty").hidden = true;
+  document.getElementById("paperBody").hidden = false;
+  const s = p.summary, h = p.account.history;
+  document.getElementById("sEquity").textContent = usd(s.equity);
+  const r = document.getElementById("sRet");
+  r.textContent = pct(s["return"], 2); r.className = "v " + (s["return"] >= 0 ? "pos" : "neg");
+  document.getElementById("sAsOf").textContent = s.as_of;
+  document.getElementById("sTrades").textContent = p.account.trades.length;
+
+  const w = h[h.length - 1].weights;
+  document.getElementById("allocBar").innerHTML =
+    ASSETS.map((k, i) => `<div title="${k} ${(100 * w[k]).toFixed(1)}%" style="width:${100 * w[k]}%;background:${colors()[i]}"></div>`).join("");
+  document.getElementById("allocLegend").innerHTML =
+    ASSETS.map((k, i) => `<span style="--sw:${colors()[i]}">${k} ${(100 * w[k]).toFixed(1)}%</span>`).join("");
+
+  lineChart("paperChart", [{label: "Paper equity", labels: h.map(x => x.date),
+    data: h.map((x, j) => ({x: j, y: x.equity})), borderColor: css("--c1"), borderWidth: 2}], v => usd(v));
+
+  document.getElementById("posTable").innerHTML = "<tr><th>Position</th><th>Shares</th><th>Price</th><th>Value</th></tr>" +
+    s.positions.map(q => `<tr><td>${q.ticker}</td><td>${q.shares.toFixed(2)}</td><td>$${q.price.toFixed(2)}</td><td>${usd(q.value)}</td></tr>`).join("") +
+    `<tr><td>Cash</td><td></td><td></td><td>${usd(s.cash)}</td></tr>`;
+  document.getElementById("tradeTable").innerHTML = "<tr><th>Date</th><th>Side</th><th>Ticker</th><th>Shares</th><th>Notional</th></tr>" +
+    p.account.trades.slice().reverse().slice(0, 60).map(t =>
+      `<tr><td>${t.date}</td><td class="${t.side === "BUY" ? "pos" : "neg"}">${t.side}</td><td>${t.ticker}</td><td>${t.shares.toFixed(2)}</td><td>${usd(t.notional)}</td></tr>`).join("");
+}
+
+async function call(url, body) {
+  const btns = document.querySelectorAll("button"), st = document.getElementById("status");
+  btns.forEach(b => b.disabled = true); st.textContent = "Fetching prices and running agent…";
+  try {
+    const res = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+    const p = await res.json();
+    if (p.error) throw new Error(p.error);
+    renderPaper(p); st.textContent = "Updated.";
+  } catch (e) { st.textContent = "Error: " + e.message; }
+  btns.forEach(b => b.disabled = false);
+}
+
+document.getElementById("stepBtn").onclick = () => call("/api/paper/step");
+document.getElementById("replayBtn").onclick = () => call("/api/paper/replay", {from: document.getElementById("replayDate").value});
+loadBacktest();
+fetch("/api/paper").then(r => r.json()).then(renderPaper);
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/
+logs/
+# keep only the deployed model + metadata; per-seed checkpoints are reproducible via scripts/train.py
+models/*_seed*/
+report/*.aux
+report/*.log
+report/*.out
