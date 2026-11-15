@@ -58,7 +58,7 @@
 <body>
 <header>
   <h1>RL Paper Trader</h1>
-  <p class="sub">A PPO reinforcement-learning agent allocating daily across SPY, QQQ, TLT, GLD and cash. Paper money only.</p>
+  <p class="sub">A PPO reinforcement-learning ensemble that rebalances weekly across SPY, QQQ, TLT, GLD and cash. Paper money only.</p>
 </header>
 <main>
   <section class="panel">
@@ -98,16 +98,15 @@
     <div class="chart"><canvas id="btChart"></canvas></div>
   </section>
 
-  <div class="grid2">
-    <section class="panel">
-      <h2>Results (mean ± std across seeds)</h2>
-      <div class="scroll"><table id="sumTable"></table></div>
-    </section>
-    <section class="panel">
-      <h2>Deployed agent allocation (test period)</h2>
-      <div class="chart"><canvas id="allocChart"></canvas></div>
-    </section>
-  </div>
+  <section class="panel">
+    <h2>Deployed agent allocation (test period)</h2>
+    <div class="chart"><canvas id="allocChart"></canvas></div>
+  </section>
+
+  <section class="panel">
+    <h2>Results on test period (mean across seeds; ensembles are single runs)</h2>
+    <div class="scroll"><table id="sumTable"></table></div>
+  </section>
 </main>
 
 <script>
@@ -141,10 +140,11 @@ async function loadBacktest() {
   const names = Object.keys(d.curves);
   const palette = [css("--c5"), css("--c2"), css("--c3"), css("--c4"), "#a06cd5", css("--c1")];
   const ds = names.map((n, i) => {
-    const isAgent = n.includes("PPO");
+    const deployed = n.startsWith("Deployed"), rulePick = n.startsWith("Validation-rule");
     return {label: n, labels: d.curves[n].dates,
             data: d.curves[n].values.map((v, j) => ({x: j, y: v})),
-            borderColor: isAgent ? css("--c1") : palette[i % 5], borderWidth: isAgent ? 2.6 : 1.4};
+            borderColor: deployed ? css("--c1") : rulePick ? css("--neg") : palette[i % 5],
+            borderDash: rulePick ? [5, 4] : [], borderWidth: deployed ? 2.8 : rulePick ? 1.8 : 1.2};
   });
   lineChart("btChart", ds, v => "$" + v.toFixed(2));
 
@@ -160,10 +160,10 @@ async function loadBacktest() {
   charts.alloc = new Chart(document.getElementById("allocChart"), {
     type: "line",
     data: {labels: idx.map(i => a.dates[i]),
-           datasets: ASSETS.map((k, i) => ({label: k, data: idx.map(j => a[k][j]), fill: true,
+           datasets: ASSETS.map((k, i) => ({label: k, data: idx.map(j => a[k][j]), fill: i === 0 ? "origin" : "-1",
                                             backgroundColor: colors()[i], borderWidth: 0, pointRadius: 0}))},
     options: {maintainAspectRatio: false, animation: false,
-              scales: {y: {stacked: true, max: 1, ticks: {callback: v => (100 * v) + "%", color: css("--muted")}, grid: {color: css("--line")}},
+              scales: {y: {stacked: true, min: 0, max: 1, ticks: {callback: v => (100 * v) + "%", color: css("--muted")}, grid: {color: css("--line")}},
                        x: {ticks: {maxTicksLimit: 6, color: css("--muted")}, grid: {display: false}}},
               plugins: {legend: {labels: {color: css("--text"), boxWidth: 12}}}}
   });
