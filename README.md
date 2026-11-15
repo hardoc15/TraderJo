@@ -19,6 +19,6 @@ python scripts/paper_trade.py                       # trade the latest close
 To send orders to an Alpaca paper account (optional), set `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` and add `--alpaca --submit`.
 
 ## Repository
-`rltrader/` core library · `scripts/` training, evaluation and paper trading · `app/` dashboard · `results/` metrics and plots · `slides/` and `report/` deliverables.
+`rltrader/` library · `scripts/` training, evaluation, paper trading · `app/` dashboard · `results/` metrics, plots · `slides/`, `report/` deliverables.
 
-This is a course project for COMP 560 and is not financial advice.
+COMP 560 course project. Not financial advice.
