@@ -101,11 +101,23 @@ def random_policy(seed=0):
     return policy
 
 
-def ppo_policy(model):
+def agent_weights(models, obs) -> np.ndarray:
+    """Target weights from one model or the average over an ensemble of models."""
+    models = models if isinstance(models, (list, tuple)) else [models]
+    return np.mean([action_to_weights(m.predict(obs, deterministic=True)[0]) for m in models], axis=0)
+
+
+def ppo_policy(models, rebalance_every: int = 1):
+    """Query the agent(s) every `rebalance_every` days; hold (drift) in between."""
+    state = {"n": 0}
+
     def policy(t, w, md):
+        n = state["n"]
+        state["n"] += 1
+        if n % rebalance_every and w[-1] != 1.0:
+            return w
         obs = np.concatenate([md.features[t], w.astype(np.float32)])
-        action, _ = model.predict(obs, deterministic=True)
-        return action_to_weights(action)
+        return agent_weights(models, obs)
     return policy
 
 

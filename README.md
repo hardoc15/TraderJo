@@ -1,24 +1,26 @@
 # TraderJo: Reinforcement-Learning Paper Trader
 
-TraderJo is a PPO (Proximal Policy Optimization) agent that rebalances a long-only portfolio of SPY, QQQ, TLT, GLD and cash once a day. A local web dashboard shows a simulated $100k paper account and backtests. No real money is traded.
+A PPO agent rebalances a long-only SPY/QQQ/TLT/GLD/cash portfolio. A local dashboard runs a simulated $100k paper account and shows backtests. No real money is traded.
 
-## How it works
-- **Environment:** a custom Gymnasium environment ([rltrader/env.py](rltrader/env.py)). The agent observes 32 technical features plus its current holdings. Its action is mapped to portfolio weights with a softmax. The reward is the daily log return after a 10 bps transaction cost.
-- **Data:** daily Yahoo Finance prices, downloaded by the code and not stored in the repo. Data is split by date: train 2006–2019, validation 2020–2021, test 2022–present. Checkpoints and seeds are chosen using validation data only.
-- **Comparisons:** buy-and-hold SPY, 60/40, equal weight, a 200-day moving-average trend rule, momentum, and a random agent. We also test variants of the PPO reward (risk-penalized, and trained without costs).
+## Method
+- **Environment** ([rltrader/env.py](rltrader/env.py)): the agent observes 32 technical features plus its current weights. A softmax maps its actions to weights. The reward is the log return after 10 bps costs. Rebalancing runs daily, weekly or monthly.
+- **Data**: Yahoo Finance daily prices (downloaded, not stored). Train 2006–2019, validate 2020–2021, test 2022–present.
+- **Baselines**: buy-and-hold SPY, 60/40, equal weight, SMA-200 trend, momentum, random.
 
-## Run it
+## Results (test, 2022–2026)
+The weekly PPO ensemble reaches Sharpe 0.62 with −20.7% max drawdown, versus 0.70 / −24.5% for SPY. Daily PPO trades about 25% of the portfolio a day, and costs cut its Sharpe to 0.23. The agent learns a nearly fixed diversified mix. Its timing adds no value over holding that mix statically (0.67). See [results/summary.md](results/summary.md).
+
+## Run
 ```bash
-python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python scripts/train.py --variant logret --seed 0   # repeat for each variant and seed
-python scripts/evaluate.py                          # results/ + models/deployed/
-python app/app.py                                   # http://127.0.0.1:5000
+python scripts/train.py --variant weekly --seed 0   # see VARIANTS
+python scripts/evaluate.py --deploy weekly
+python app/app.py                                   # http://127.0.0.1:8050
 python scripts/paper_trade.py                       # trade the latest close
 ```
-To send orders to an Alpaca paper account (optional), set `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` and add `--alpaca --submit`.
+For an Alpaca paper account, set `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`, then add `--alpaca --submit`.
 
-## Repository
-`rltrader/` library · `scripts/` training, evaluation, paper trading · `app/` dashboard · `results/` metrics, plots · `slides/`, `report/` deliverables.
+## Layout
+`rltrader/` library · `scripts/` · `app/` dashboard · `results/` · `models/deployed/` · `slides/`, `report/`
 
 COMP 560 course project. Not financial advice.

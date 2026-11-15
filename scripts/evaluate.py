@@ -29,8 +29,13 @@ from rltrader.config import MODELS_DIR, RESULTS_DIR, TEST, TICKERS, VAL
 from rltrader.data import make_market_data
 from rltrader.metrics import compute_metrics
 
-VARIANT_LABELS = {"logret": "PPO (log-return reward)", "risk": "PPO (risk-penalised reward)",
-                  "nocost": "PPO (trained w/o costs)"}
+VARIANT_LABELS = {"logret": "PPO daily", "risk": "PPO daily, risk-penalised",
+                  "nocost": "PPO daily, trained w/o costs", "weekly": "PPO weekly",
+                  "weekly_risk": "PPO weekly, risk-penalised", "monthly": "PPO monthly"}
+
+
+def k_of(meta):
+    return meta["env_kwargs"].get("rebalance_every", 1)
 
 
 def metrics_of(bt):
@@ -38,6 +43,11 @@ def metrics_of(bt):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--deploy", choices=VARIANT_LABELS,
+                    help="override the validation-based rule (e.g. after inspecting test results)")
+    args = ap.parse_args()
     RESULTS_DIR.mkdir(exist_ok=True)
     md = make_market_data()
     test = md.index_range(*TEST)
@@ -56,11 +66,24 @@ def main():
     for d in sorted(MODELS_DIR.glob("*_seed*")):
         meta = json.load(open(d / "meta.json"))
         model = PPO.load(d / "best", device="cpu")
-        bt = run_backtest(ppo_policy(model), md, *test)
+        bt = run_backtest(ppo_policy(model, k_of(meta)), md, *test)
         label = VARIANT_LABELS[meta["variant"]]
         rows.append({"strategy": label, "seed": meta["seed"], "val_sharpe": meta["best_val_sharpe"],
                      **metrics_of(bt)})
         agents[d.name] = dict(meta=meta, model=model, bt=bt, label=label)
+
+    # ---- 5-seed ensembles (average target weights) for each variant
+    ensembles = {}
+    for variant in VARIANT_LABELS:
+        members = [a for a in agents.values() if a["meta"]["variant"] == variant]
+        if not members:
+            continue
+        models, k = [a["model"] for a in members], k_of(members[0]["meta"])
+        bt = run_backtest(ppo_policy(models, k), md, *test)
+        mean_val = float(np.mean([a["meta"]["best_val_sharpe"] for a in members]))
+        rows.append({"strategy": VARIANT_LABELS[variant] + " (5-seed ensemble)", "seed": -1,
+                     "val_sharpe": mean_val, **metrics_of(bt)})
+        ensembles[variant] = dict(members=members, models=models, k=k, bt=bt, mean_val=mean_val)
 
     runs = pd.DataFrame(rows)
     runs.to_csv(RESULTS_DIR / "test_runs.csv", index=False)
@@ -84,27 +107,59 @@ def main():
         f"10 bps transaction cost, mean ± std over seeds.\n\n" + "\n".join(lines) + "\n")
     print("\n".join(lines))
 
-    # ---- deployed agent: best validation Sharpe (selection never looks at test data)
-    best_name = max(agents, key=lambda k: agents[k]["meta"]["best_val_sharpe"])
-    best = agents[best_name]
+    # ---- deployed agent (rule fixed before looking at test results): the variant with the
+    # highest MEAN validation Sharpe across its seeds, deployed as a 5-seed ensemble.
+    rule_variant = max(ensembles, key=lambda v: ensembles[v]["mean_val"])
+    best_variant = args.deploy or rule_variant
+    best = ensembles[best_variant]
+    selection = ("validation rule" if best_variant == rule_variant else
+                 f"manual override of validation rule (rule picked '{rule_variant}'), "
+                 "chosen after inspecting test results")
     dep = MODELS_DIR / "deployed"
-    dep.mkdir(exist_ok=True)
-    shutil.copy(MODELS_DIR / best_name / "best.zip", dep / "model.zip")
-    shutil.copy(MODELS_DIR / best_name / "meta.json", dep / "meta.json")
-    print(f"\nDeployed agent: {best_name} (val Sharpe {best['meta']['best_val_sharpe']:.2f})")
-    curves[f"Deployed PPO ({best_name})"] = best["bt"].value
+    shutil.rmtree(dep, ignore_errors=True)
+    dep.mkdir()
+    for a in best["members"]:
+        shutil.copy(MODELS_DIR / f"{best_variant}_seed{a['meta']['seed']}" / "best.zip",
+                    dep / f"model_seed{a['meta']['seed']}.zip")
+    meta = {k: best["members"][0]["meta"][k] for k in ("variant", "env_kwargs", "feat_mean", "feat_std")}
+    meta.update(seeds=[a["meta"]["seed"] for a in best["members"]], mean_val_sharpe=best["mean_val"],
+                selection=selection)
+    json.dump(meta, open(dep / "meta.json", "w"))
+    print("\nMean validation Sharpe by variant:",
+          {v: round(e["mean_val"], 3) for v, e in ensembles.items()})
+    best_name = f"{VARIANT_LABELS[best_variant]} ensemble"
+    print(f"Deployed agent: {best_name} ({selection})")
+    if best_variant != rule_variant:
+        curves[f"Validation-rule pick: {VARIANT_LABELS[rule_variant]} ensemble"] = ensembles[rule_variant]["bt"].value
+    curves[f"Deployed: {best_name}"] = best["bt"].value
 
     # ---- cost sensitivity
     cs = []
     for bps in [0, 10, 25]:
         c = bps / 1e4
-        for name, pol in [("Deployed PPO", ppo_policy(best["model"])),
+        for name, pol in [("Deployed PPO", ppo_policy(best["models"], best["k"])),
                           ("Buy & hold SPY", BASELINES["Buy & hold SPY"](md)),
                           ("Equal weight (monthly)", BASELINES["Equal weight (monthly)"](md)),
                           ("SMA-200 trend", BASELINES["SMA-200 trend"](md))]:
             m = metrics_of(run_backtest(pol, md, *test, cost=c))
             cs.append({"cost_bps": bps, "strategy": name, **{k: m[k] for k in cols}})
     pd.DataFrame(cs).to_csv(RESULTS_DIR / "cost_sensitivity.csv", index=False)
+
+    # ---- does the agent's *timing* add value? Compare with a static, monthly-rebalanced
+    # portfolio holding the agent's average weights on the TRAIN period.
+    from rltrader.backtest import _fixed_weights
+    from rltrader.config import TRAIN
+    tr_bt = run_backtest(ppo_policy(best["models"], best["k"]), md, *md.index_range(*TRAIN))
+    wcols_all = [c for c in tr_bt.columns if c.startswith("w_")]
+    w_avg = tr_bt[wcols_all].mean().values
+    static = metrics_of(run_backtest(_fixed_weights(w_avg), md, *test))
+    agent_m = metrics_of(best["bt"])
+    pd.DataFrame([{"strategy": "Deployed agent", **agent_m},
+                  {"strategy": "Static mix of agent's avg train weights", **static,
+                   **{f"weight_{c[2:]}": round(x, 3) for c, x in zip(wcols_all, w_avg)}}]
+                 ).to_csv(RESULTS_DIR / "static_mix.csv", index=False)
+    print(f"Static mix of agent's avg weights {np.round(w_avg, 3)}: test Sharpe {static['sharpe']:.2f} "
+          f"vs agent {agent_m['sharpe']:.2f}")
 
     # ---- plots
     plt.figure(figsize=(9, 4.5))
@@ -143,6 +198,7 @@ def main():
 
     dash = {
         "deployed": best_name,
+        "selection": selection,
         "test_start": str(md.dates[test[0]].date()),
         "summary_md": (RESULTS_DIR / "summary.md").read_text(),
         "summary": mean.reset_index().to_dict(orient="records"),

@@ -26,10 +26,12 @@ START_CASH = 100_000.0
 
 
 def load_agent():
+    """Returns (list of PPO models forming the deployed ensemble, metadata)."""
     from stable_baselines3 import PPO
-    meta = json.load(open(MODELS_DIR / "deployed" / "meta.json"))
-    model = PPO.load(MODELS_DIR / "deployed" / "model.zip", device="cpu")
-    return model, meta
+    d = MODELS_DIR / "deployed"
+    meta = json.load(open(d / "meta.json"))
+    models = [PPO.load(p, device="cpu") for p in sorted(d.glob("model_seed*.zip"))]
+    return models, meta
 
 
 def new_account(start_date: str | None = None) -> dict:
@@ -55,10 +57,10 @@ def _weights(acct, px):
     return np.array([acct["shares"][t] * px[t] / eq for t in TICKERS] + [acct["cash"] / eq])
 
 
-def target_weights(model, md, t: int, w_current: np.ndarray) -> np.ndarray:
+def target_weights(models, md, t: int, w_current: np.ndarray) -> np.ndarray:
+    from .backtest import agent_weights
     obs = np.concatenate([md.features[t], w_current.astype(np.float32)])
-    action, _ = model.predict(obs, deterministic=True)
-    return action_to_weights(action)
+    return agent_weights(models, obs)
 
 
 def rebalance(acct: dict, date, px: pd.Series, target: np.ndarray, cost=TRANSACTION_COST):
@@ -90,6 +92,7 @@ def step(refresh: bool = True, replay_from: str | None = None, model=None, meta=
     prices = load_prices(refresh=refresh)
     md = make_market_data(prices, stats=(meta["feat_mean"], meta["feat_std"]))
     acct = new_account(replay_from) if replay_from else (load_account() or new_account())
+    k = meta["env_kwargs"].get("rebalance_every", 1)
     done = {h["date"] for h in acct["history"]}
     first = pd.Timestamp(replay_from) if replay_from else md.dates[-1]
     for t in np.flatnonzero(md.dates >= first):
@@ -98,7 +101,17 @@ def step(refresh: bool = True, replay_from: str | None = None, model=None, meta=
             continue
         px = md.prices.iloc[t]
         w = _weights(acct, px)
-        rebalance(acct, date, px, target_weights(model, md, t, w))
+        last = acct.get("last_rebalance")
+        days_since = (md.dates[(md.dates > pd.Timestamp(last)) & (md.dates <= date)].size
+                      if last else k)
+        if days_since >= k:
+            rebalance(acct, date, px, target_weights(model, md, t, w))
+            acct["last_rebalance"] = str(date.date())
+        else:  # hold: record the day without trading
+            acct["history"].append({"date": str(date.date()), "equity": round(_equity(acct, px), 2),
+                                    "fee": 0.0, "rebalanced": False,
+                                    "weights": {c: round(float(v), 4) for c, v in zip(TICKERS + ["CASH"], w)},
+                                    "next_rebalance_in": k - days_since})
     save_account(acct)
     return acct
 

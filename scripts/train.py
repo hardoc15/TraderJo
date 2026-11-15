@@ -34,18 +34,23 @@ VARIANTS = {
     "logret": dict(reward_mode="logret", cost=TRANSACTION_COST),
     "risk": dict(reward_mode="risk", risk_lambda=0.02, cost=TRANSACTION_COST),
     "nocost": dict(reward_mode="logret", cost=0.0),   # ablation: trained ignoring costs
+    # lower decision frequency: trade on day 1, then hold k days
+    "weekly": dict(reward_mode="logret", cost=TRANSACTION_COST, rebalance_every=5),
+    "weekly_risk": dict(reward_mode="risk", risk_lambda=0.02, cost=TRANSACTION_COST, rebalance_every=5),
+    "monthly": dict(reward_mode="logret", cost=TRANSACTION_COST, rebalance_every=21),
 }
 
 
 class ValSelector(BaseCallback):
-    def __init__(self, md, val_range, eval_freq, out_dir):
+    def __init__(self, md, val_range, eval_freq, out_dir, k=1):
         super().__init__()
+        self.k = k
         self.md, self.val_range, self.eval_freq, self.out_dir = md, val_range, eval_freq, out_dir
         self.best, self.log = -np.inf, []
 
     def _on_step(self):
         if self.num_timesteps % self.eval_freq < self.training_env.num_envs:
-            bt = run_backtest(ppo_policy(self.model), self.md, *self.val_range)
+            bt = run_backtest(ppo_policy(self.model, self.k), self.md, *self.val_range)
             m = compute_metrics(bt.net_return.values, bt.turnover.values)
             self.log.append({"step": self.num_timesteps, **m})
             if m["sharpe"] > self.best:
@@ -77,7 +82,7 @@ def main():
     model = PPO("MlpPolicy", venv, seed=args.seed, learning_rate=3e-4, n_steps=1024,
                 batch_size=256, n_epochs=10, gamma=0.99, gae_lambda=0.95, ent_coef=0.001,
                 policy_kwargs=dict(net_arch=[64, 64], log_std_init=-0.5), verbose=0)
-    cb = ValSelector(md, val, args.eval_freq, out)
+    cb = ValSelector(md, val, args.eval_freq, out, env_kwargs.get("rebalance_every", 1))
     t0 = time.time()
     model.learn(args.timesteps, callback=cb)
     model.save(out / "final")

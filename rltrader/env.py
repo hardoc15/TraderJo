@@ -26,10 +26,12 @@ class PortfolioEnv(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, md, start_idx: int, end_idx: int, episode_len: int | None = 504,
-                 cost: float = 0.001, reward_mode: str = "logret", risk_lambda: float = 0.02):
+                 cost: float = 0.001, reward_mode: str = "logret", risk_lambda: float = 0.02,
+                 rebalance_every: int = 1):
         super().__init__()
         self.md, self.lo, self.hi = md, start_idx, end_idx
         self.episode_len, self.cost = episode_len, cost
+        self.k = rebalance_every          # trading days held between decisions
         self.reward_mode, self.risk_lambda = reward_mode, risk_lambda
         self.n = md.fwd_returns.shape[1]
         obs_dim = md.features.shape[1] + self.n + 1
@@ -53,12 +55,19 @@ class PortfolioEnv(gym.Env):
 
     def step(self, action):
         target = action_to_weights(action)
-        r = self.md.fwd_returns[self.t]
-        self.value, self.w, turnover, net = rebalance_step(self.value, self.w, target, r, self.cost)
-        reward = 100.0 * np.log1p(net)
-        if self.reward_mode == "risk":
-            reward -= self.risk_lambda * (100.0 * net) ** 2
-        self.t += 1
+        reward, total_turnover, w_hold = 0.0, 0.0, target
+        for _ in range(self.k):            # trade on the first day, then let weights drift
+            r = self.md.fwd_returns[self.t]
+            self.value, self.w, turnover, net = rebalance_step(self.value, self.w, w_hold, r, self.cost)
+            total_turnover += turnover
+            reward += 100.0 * np.log1p(net)
+            if self.reward_mode == "risk":
+                reward -= self.risk_lambda * (100.0 * net) ** 2
+            w_hold = self.w
+            self.t += 1
+            if self.t >= self.end:
+                break
+        turnover = total_turnover
         terminated = self.t >= self.end
         info = {"value": self.value, "turnover": turnover, "net_return": net, "weights": target}
         obs = self._obs() if not terminated else np.zeros(self.observation_space.shape, np.float32)

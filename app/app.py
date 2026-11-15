@@ -1,6 +1,6 @@
 """Local dashboard for the RL paper-trading agent.
 
-    python app/app.py    ->  http://127.0.0.1:5000
+    python app/app.py    ->  http://127.0.0.1:8050
 """
 import json
 import sys
@@ -68,4 +68,4 @@ def paper_replay():
 
 
 if __name__ == "__main__":
-    app.run(debug=False, port=5000)
+    app.run(debug=False, port=8050)
